@@ -272,6 +272,18 @@ init({ServerHost, Opts}) ->
       Mode ->
 	  file:change_mode(DocRoot, Mode)
     end,
+    case Thumbnail of
+      true ->
+	  case string:str(os:cmd("identify"), "Magick") of
+	    0 ->
+		?ERROR_MSG("Cannot find 'identify' command, please install "
+			   "ImageMagick or disable thumbnail creation", []);
+	    _ ->
+		ok
+	  end;
+      false ->
+	  ok
+    end,
     ejabberd_router:register_route(Host),
     {ok, #state{server_host = ServerHost, host = Host, name = Name,
 		access = Access, max_size = MaxSize,
@@ -856,7 +868,7 @@ identify(Path) ->
 		    height = list_to_integer(H),
 		    width = list_to_integer(W)}};
 	_ ->
-	    ?ERROR_MSG("failed to identify type of ~s: ~s", [Path, Res]),
+	    ?DEBUG("failed to identify type of ~s: ~s", [Path, Res]),
 	    {error, Res}
     end.
 
