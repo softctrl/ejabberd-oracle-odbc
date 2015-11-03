@@ -25,8 +25,8 @@ CREATE TABLE users (
 );
 
 -- To support SCRAM auth:
--- ALTER TABLE USERS ADD (serverkey varchar2(255) DEFAULT '' NOT NULL);
--- ALTER TABLE USERS ADD (salt varchar2(255) DEFAULT '' NOT NULL);
+-- ALTER TABLE USERS ADD (serverkey varchar2(255) DEFAULT '.' NOT NULL);
+-- ALTER TABLE USERS ADD (salt varchar2(255) DEFAULT '.' NOT NULL);
 -- ALTER TABLE USERS ADD (iterationcount INTEGER DEFAULT 0 NOT NULL);
 
 CREATE TABLE last (
@@ -39,7 +39,7 @@ CREATE TABLE last (
 CREATE TABLE rosterusers (
     username varchar2(255) NOT NULL,
     jid varchar2(255) NOT NULL,
-    nick varchar2(255) DEFAULT '' NOT NULL,
+    nick varchar2(255) DEFAULT '.' NOT NULL,
     subscription char(1) NOT NULL,
     ask char(1) NOT NULL,
     askmessage varchar2(4000) NOT NULL,
