@@ -341,7 +341,7 @@ del_user_roster_t(LServer, Username) ->
 
 get_roster_by_jid(_LServer, Username, SJID) ->
     ejabberd_odbc:sql_query_t([<<"select username AS \"username\", jid AS \"jid\", nick AS \"nick\", subscription AS \"subscription\", "
-				 "ask AS \"ask\", askmessage AS \"askmessage\", server AS \"serveR\", subscribe AS \"subscribe\", "
+				 "ask AS \"ask\", askmessage AS \"askmessage\", server AS \"server\", subscribe AS \"subscribe\", "
 				 "\"type\" AS \"type\" from rosterusers where username='">>,
 			       Username, <<"' and jid='">>, SJID, <<"';">>]).
 
