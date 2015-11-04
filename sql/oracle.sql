@@ -42,7 +42,7 @@ CREATE TABLE rosterusers (
     nick varchar2(255) DEFAULT '.' NOT NULL,
     subscription char(1) NOT NULL,
     ask char(1) NOT NULL,
-    askmessage varchar2(4000) NOT NULL,
+    askmessage varchar2(4000) DEFAULT '.' NOT NULL,
     server char(1) NOT NULL,
     subscribe varchar2(4000),
     "type" varchar2(255),
