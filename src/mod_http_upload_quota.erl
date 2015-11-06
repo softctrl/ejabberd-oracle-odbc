@@ -1,9 +1,27 @@
-%%%-------------------------------------------------------------------
+%%%----------------------------------------------------------------------
 %%% File    : mod_http_upload_quota.erl
 %%% Author  : Holger Weiss <holger@zedat.fu-berlin.de>
 %%% Purpose : Quota management for HTTP File Upload (XEP-0363)
 %%% Created : 15 Oct 2015 by Holger Weiss <holger@zedat.fu-berlin.de>
-%%%-------------------------------------------------------------------
+%%%
+%%%
+%%% ejabberd, Copyright (C) 2015   ProcessOne
+%%%
+%%% This program is free software; you can redistribute it and/or
+%%% modify it under the terms of the GNU General Public License as
+%%% published by the Free Software Foundation; either version 2 of the
+%%% License, or (at your option) any later version.
+%%%
+%%% This program is distributed in the hope that it will be useful,
+%%% but WITHOUT ANY WARRANTY; without even the implied warranty of
+%%% MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+%%% General Public License for more details.
+%%%
+%%% You should have received a copy of the GNU General Public License along
+%%% with this program; if not, write to the Free Software Foundation, Inc.,
+%%% 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+%%%
+%%%----------------------------------------------------------------------
 
 -module(mod_http_upload_quota).
 -author('holger@zedat.fu-berlin.de').
@@ -75,8 +93,8 @@ start(ServerHost, Opts) ->
 
 stop(ServerHost) ->
     Proc = mod_http_upload:get_proc_name(ServerHost, ?PROCNAME),
-    ok = supervisor:terminate_child(ejabberd_sup, Proc),
-    ok = supervisor:delete_child(ejabberd_sup, Proc).
+    supervisor:terminate_child(ejabberd_sup, Proc),
+    supervisor:delete_child(ejabberd_sup, Proc).
 
 -spec mod_opt_type(atom()) -> fun((term()) -> term()) | [atom()].
 
@@ -332,7 +350,7 @@ del_file_and_dir(File) ->
 	    ok ->
 		?DEBUG("Removed ~s", [Dir]);
 	    {error, Error} ->
-		?INFO_MSG("Cannot remove ~s: ~s", [Dir, ?FORMAT(Error)])
+		?DEBUG("Cannot remove ~s: ~s", [Dir, ?FORMAT(Error)])
 	  end;
       {error, Error} ->
 	  ?WARNING_MSG("Cannot remove ~s: ~s", [File, ?FORMAT(Error)])
