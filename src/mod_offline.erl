@@ -284,18 +284,25 @@ need_to_store(LServer, Packet) ->
     Type = xml:get_tag_attr_s(<<"type">>, Packet),
     if (Type /= <<"error">>) and (Type /= <<"groupchat">>)
        and (Type /= <<"headline">>) ->
-	    case gen_mod:get_module_opt(
-		   LServer, ?MODULE, store_empty_body,
-		   fun(V) when is_boolean(V) -> V;
-		      (unless_chat_state) -> unless_chat_state
-		   end,
-		   unless_chat_state) of
-		false ->
-		    xml:get_subtag(Packet, <<"body">>) /= false;
-		unless_chat_state ->
-		    not jlib:is_standalone_chat_state(Packet);
-		true ->
-		    true
+	    case check_store_hint(Packet) of
+		store ->
+		    true;
+		no_store ->
+		    false;
+		none ->
+		    case gen_mod:get_module_opt(
+			   LServer, ?MODULE, store_empty_body,
+			   fun(V) when is_boolean(V) -> V;
+			      (unless_chat_state) -> unless_chat_state
+			   end,
+			   unless_chat_state) of
+			false ->
+			    xml:get_subtag(Packet, <<"body">>) /= false;
+			unless_chat_state ->
+			    not jlib:is_standalone_chat_state(Packet);
+			true ->
+			    true
+		    end
 	    end;
        true ->
 	    false
@@ -304,32 +311,44 @@ need_to_store(LServer, Packet) ->
 store_packet(From, To, Packet) ->
     case need_to_store(To#jid.lserver, Packet) of
 	true ->
-	    case has_no_store_hint(Packet) of
-		false ->
-		    case check_event(From, To, Packet) of
-			true ->
-			    #jid{luser = LUser, lserver = LServer} = To,
-			    TimeStamp = now(),
-			    #xmlel{children = Els} = Packet,
-			    Expire = find_x_expire(TimeStamp, Els),
-			    gen_mod:get_module_proc(To#jid.lserver, ?PROCNAME) !
-			    #offline_msg{us = {LUser, LServer},
-				timestamp = TimeStamp, expire = Expire,
-				from = From, to = To, packet = Packet},
-			    stop;
-			_ -> ok
-		    end;
+	    case check_event(From, To, Packet) of
+		true ->
+		    #jid{luser = LUser, lserver = LServer} = To,
+		    TimeStamp = p1_time_compat:timestamp(),
+		    #xmlel{children = Els} = Packet,
+		    Expire = find_x_expire(TimeStamp, Els),
+		    gen_mod:get_module_proc(To#jid.lserver, ?PROCNAME) !
+		      #offline_msg{us = {LUser, LServer},
+				   timestamp = TimeStamp, expire = Expire,
+				   from = From, to = To, packet = Packet},
+		    stop;
 		_ -> ok
 	    end;
 	false -> ok
     end.
+
+check_store_hint(Packet) ->
+    case has_store_hint(Packet) of
+	true ->
+	    store;
+	false ->
+	    case has_no_store_hint(Packet) of
+		true ->
+		    no_store;
+		false ->
+		    none
+	    end
+    end.
+
+has_store_hint(Packet) ->
+    xml:get_subtag_with_xmlns(Packet, <<"store">>, ?NS_HINTS) =/= false.
 
 has_no_store_hint(Packet) ->
     xml:get_subtag_with_xmlns(Packet, <<"no-store">>, ?NS_HINTS) =/= false
       orelse
       xml:get_subtag_with_xmlns(Packet, <<"no-storage">>, ?NS_HINTS) =/= false.
 
-%% Check if the packet has any content about XEP-0022 or XEP-0085
+%% Check if the packet has any content about XEP-0022
 check_event(From, To, Packet) ->
     #xmlel{name = Name, attrs = Attrs, children = Els} =
 	Packet,
@@ -373,7 +392,7 @@ check_event(From, To, Packet) ->
 	  end
     end.
 
-%% Check if the packet has subelements about XEP-0022, XEP-0085 or other
+%% Check if the packet has subelements about XEP-0022
 find_x_event([]) -> false;
 find_x_event([{xmlcdata, _} | Els]) ->
     find_x_event(Els);
@@ -441,7 +460,7 @@ pop_offline_messages(Ls, LUser, LServer, mnesia) ->
 	end,
     case mnesia:transaction(F) of
       {atomic, Rs} ->
-	  TS = now(),
+	  TS = p1_time_compat:timestamp(),
 	  Ls ++
 	    lists:map(fun (R) ->
 			      offline_msg_to_route(LServer, R)
@@ -487,7 +506,7 @@ pop_offline_messages(Ls, LUser, LServer, riak) ->
                   fun(#offline_msg{timestamp = T}) ->
                           ok = ejabberd_riak:delete(offline_msg, T)
                   end, Rs),
-                TS = now(),
+                TS = p1_time_compat:timestamp(),
                 Ls ++ lists:map(
                         fun (R) ->
                                 offline_msg_to_route(LServer, R)
@@ -513,7 +532,7 @@ remove_expired_messages(Server) ->
 			    gen_mod:db_type(LServer, ?MODULE)).
 
 remove_expired_messages(_LServer, mnesia) ->
-    TimeStamp = now(),
+    TimeStamp = p1_time_compat:timestamp(),
     F = fun () ->
 		mnesia:write_lock_table(offline_msg),
 		mnesia:foldl(fun (Rec, _Acc) ->
@@ -538,8 +557,7 @@ remove_old_messages(Days, Server) ->
 			gen_mod:db_type(LServer, ?MODULE)).
 
 remove_old_messages(Days, _LServer, mnesia) ->
-    {MegaSecs, Secs, _MicroSecs} = now(),
-    S = MegaSecs * 1000000 + Secs - 60 * 60 * 24 * Days,
+    S = p1_time_compat:system_time(seconds) - 60 * 60 * 24 * Days,
     MegaSecs1 = S div 1000000,
     Secs1 = S rem 1000000,
     TimeStamp = {MegaSecs1, Secs1, 0},
@@ -949,7 +967,7 @@ get_messages_subset2(Max, Length, MsgsAll, DBType)
     MsgsLastN = lists:nthtail(Length - FirstN - FirstN,
 			      Msgs2),
     NoJID = jid:make(<<"...">>, <<"...">>, <<"">>),
-    IntermediateMsg = #offline_msg{timestamp = now(),
+    IntermediateMsg = #offline_msg{timestamp = p1_time_compat:timestamp(),
 				   from = NoJID, to = NoJID,
 				   packet =
 				       #xmlel{name = <<"...">>, attrs = [],
@@ -1113,7 +1131,7 @@ import(LServer) ->
                        {_, _, _} = Now ->
                            Now;
                        undefined ->
-                           now()
+                           p1_time_compat:timestamp()
                    end,
               Expire = find_x_expire(TS, El#xmlel.children),
               #offline_msg{us = {LUser, LServer},

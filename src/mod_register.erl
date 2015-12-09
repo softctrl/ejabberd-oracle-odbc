@@ -72,8 +72,11 @@ stop(Host) ->
     gen_iq_handler:remove_iq_handler(ejabberd_sm, Host,
 				     ?NS_REGISTER).
 
-stream_feature_register(Acc, _Host) ->
-    case lists:keymember(<<"mechanisms">>, 2, Acc) of
+stream_feature_register(Acc, Host) ->
+    AF = gen_mod:get_module_opt(Host, ?MODULE, access_from,
+                                          fun(A) when is_atom(A) -> A end,
+					  all),
+    case (AF /= none) and lists:keymember(<<"mechanisms">>, 2, Acc) of
 	true ->
 	    [#xmlel{name = <<"register">>,
 		    attrs = [{<<"xmlns">>, ?NS_FEATURE_IQREGISTER}],
@@ -509,8 +512,7 @@ check_timeout(Source) ->
                         infinity
                 end, 600),
     if is_integer(Timeout) ->
-	   {MSec, Sec, _USec} = now(),
-	   Priority = -(MSec * 1000000 + Sec),
+	   Priority = -p1_time_compat:system_time(seconds),
 	   CleanPriority = Priority + Timeout,
 	   F = fun () ->
 		       Treap = case mnesia:read(mod_register_ip, treap, write)
