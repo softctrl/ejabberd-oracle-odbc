@@ -1,40 +1,28 @@
-%%% ====================================================================
-%%% ``The contents of this file are subject to the Erlang Public License,
-%%% Version 1.1, (the "License"); you may not use this file except in
-%%% compliance with the License. You should have received a copy of the
-%%% Erlang Public License along with this software. If not, it can be
-%%% retrieved via the world wide web at http://www.erlang.org/.
-%%% 
+%%%----------------------------------------------------------------------
+%%% File    : mod_pubsub.erl
+%%% Author  : Christophe Romain <christophe.romain@process-one.net>
+%%% Purpose : Publish Subscribe service (XEP-0060)
+%%% Created :  1 Dec 2007 by Christophe Romain <christophe.romain@process-one.net>
 %%%
-%%% Software distributed under the License is distributed on an "AS IS"
-%%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%%% the License for the specific language governing rights and limitations
-%%% under the License.
-%%% 
 %%%
-%%% The Initial Developer of the Original Code is ProcessOne.
-%%% Portions created by ProcessOne are Copyright 2006-2015, ProcessOne
-%%% All Rights Reserved.''
-%%% This software is copyright 2006-2015, ProcessOne.
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
-%%% @copyright 2006-2015 ProcessOne
-%%% @author Christophe Romain <christophe.romain@process-one.net>
-%%%   [http://www.process-one.net/]
-%%% @version {@vsn}, {@date} {@time}
-%%% @end
-%%% ====================================================================
+%%% This program is free software; you can redistribute it and/or
+%%% modify it under the terms of the GNU General Public License as
+%%% published by the Free Software Foundation; either version 2 of the
+%%% License, or (at your option) any later version.
+%%%
+%%% This program is distributed in the hope that it will be useful,
+%%% but WITHOUT ANY WARRANTY; without even the implied warranty of
+%%% MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+%%% General Public License for more details.
+%%%
+%%% You should have received a copy of the GNU General Public License along
+%%% with this program; if not, write to the Free Software Foundation, Inc.,
+%%% 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+%%%
+%%%----------------------------------------------------------------------
 
-%%% @doc The module <strong>{@module}</strong> is the core of the PubSub
-%%% extension. It relies on PubSub plugins for a large part of its functions.
-%%%
-%%% @headerfile "pubsub.hrl"
-%%%
-%%% @reference See <a href="http://www.xmpp.org/extensions/xep-0060.html">XEP-0060: Pubsub</a> for
-%%% the latest version of the PubSub specification.
-%%% This module uses version 1.12 of the specification as a base.
-%%% Most of the specification is implemented.
-%%% Functions concerning configuration should be rewritten.
-%%%
 %%% Support for subscription-options and multi-subscribe features was
 %%% added by Brian Cully (bjc AT kublai.com). Subscriptions and options are
 %%% stored in the pubsub_subscription table, with a link to them provided
@@ -1232,7 +1220,7 @@ iq_get_vcard(Lang) ->
 	#xmlel{name = <<"DESC">>, attrs = [],
 	    children = [{xmlcdata,
 		    <<(translate:translate(Lang, <<"ejabberd Publish-Subscribe module">>))/binary,
-			"\nCopyright (c) 2004-2015 ProcessOne">>}]}].
+			"\nCopyright (c) 2004-2016 ProcessOne">>}]}].
 
 -spec(iq_pubsub/6 ::
     (
@@ -2532,18 +2520,18 @@ send_items(Host, Node, Nidx, Type, Options, LJID, last) ->
 	undefined ->
 	    ok;
 	LastItem ->
-	    Stanza = items_event_stanza(Node, [LastItem]),
-	    dispatch_items(Host, LJID, Node, Options, Stanza)
+	    Stanza = items_event_stanza(Node, Options, [LastItem]),
+	    dispatch_items(Host, LJID, Node, Stanza)
     end;
 send_items(Host, Node, Nidx, Type, Options, LJID, Number) when Number > 0 ->
-    Stanza = items_event_stanza(Node, get_last_items(Host, Type, Nidx, Number, LJID)),
-    dispatch_items(Host, LJID, Node, Options, Stanza);
+    Stanza = items_event_stanza(Node, Options, get_last_items(Host, Type, Nidx, Number, LJID)),
+    dispatch_items(Host, LJID, Node, Stanza);
 send_items(Host, Node, _Nidx, _Type, Options, LJID, _) ->
-    Stanza = items_event_stanza(Node, []),
-    dispatch_items(Host, LJID, Node, Options, Stanza).
+    Stanza = items_event_stanza(Node, Options, []),
+    dispatch_items(Host, LJID, Node, Stanza).
 
-dispatch_items({FromU, FromS, FromR} = From, {ToU, ToS, ToR} = To, Node,
-	    Options, Stanza) ->
+dispatch_items({FromU, FromS, FromR} = From, {ToU, ToS, ToR} = To,
+	    Node, Stanza) ->
     C2SPid = case ejabberd_sm:get_session_pid(ToU, ToS, ToR) of
 	ToPid when is_pid(ToPid) -> ToPid;
 	_ ->
@@ -2555,17 +2543,13 @@ dispatch_items({FromU, FromS, FromR} = From, {ToU, ToS, ToR} = To, Node,
     end,
     if C2SPid == undefined -> ok;
 	true ->
-	    NotificationType = get_option(Options, notification_type, headline),
-	    Message = add_message_type(Stanza, NotificationType),
 	    ejabberd_c2s:send_filtered(C2SPid,
 		{pep_message, <<Node/binary, "+notify">>},
 		service_jid(From), jid:make(To),
-		Message)
+		Stanza)
     end;
-dispatch_items(From, To, _Node, Options, Stanza) ->
-    NotificationType = get_option(Options, notification_type, headline),
-    Message = add_message_type(Stanza, NotificationType),
-    ejabberd_router:route(service_jid(From), jid:make(To), Message).
+dispatch_items(From, To, _Node, Stanza) ->
+    ejabberd_router:route(service_jid(From), jid:make(To), Stanza).
 
 %% @doc <p>Return the list of affiliations as an XMPP response.</p>
 -spec(get_affiliations/4 ::
@@ -3269,7 +3253,7 @@ payload_xmlelements([#xmlel{} | Tail], Count) ->
 payload_xmlelements([_ | Tail], Count) ->
     payload_xmlelements(Tail, Count).
 
-items_event_stanza(Node, Items) ->
+items_event_stanza(Node, Options, Items) ->
     MoreEls = case Items of
 	[LastItem] ->
 	    {ModifNow, ModifUSR} = LastItem#pubsub_item.modification,
@@ -3282,10 +3266,12 @@ items_event_stanza(Node, Items) ->
 	_ ->
 	    []
     end,
-    event_stanza_with_els([#xmlel{name = <<"items">>,
-		attrs = [{<<"type">>, <<"headline">>} | nodeAttr(Node)],
+    BaseStanza = event_stanza_with_els([#xmlel{name = <<"items">>,
+		attrs = nodeAttr(Node),
 		children = itemsEls(Items)}],
-	MoreEls).
+	MoreEls),
+    NotificationType = get_option(Options, notification_type, headline),
+    add_message_type(BaseStanza, NotificationType).
 
 event_stanza(Els) ->
     event_stanza_with_els(Els, []).
@@ -3436,12 +3422,19 @@ get_node_subs_by_depth(Host, Node, From) ->
     [{Depth, [{N, get_node_subs(Host, N)} || N <- Nodes]} || {Depth, Nodes} <- ParentTree].
 
 get_node_subs(Host, #pubsub_node{type = Type, id = Nidx}) ->
+    WithOptions =  lists:member(<<"subscription-options">>, plugin_features(Host, Type)),
     case node_call(Host, Type, get_node_subscriptions, [Nidx]) of
-	{result, Subs} -> get_options_for_subs(Host, Nidx, Subs);
+	{result, Subs} -> get_options_for_subs(Host, Nidx, Subs, WithOptions);
 	Other -> Other
     end.
 
-get_options_for_subs(Host, Nidx, Subs) ->
+get_options_for_subs(_Host, _Nidx, Subs, false) ->
+    lists:foldl(fun({JID, subscribed, SubID}, Acc) ->
+		    [{JID, SubID, []} | Acc];
+		   (_, Acc) ->
+		    Acc
+	end, [], Subs);
+get_options_for_subs(Host, Nidx, Subs, true) ->
     SubModule = subscription_plugin(Host),
     lists:foldl(fun({JID, subscribed, SubID}, Acc) ->
 		case SubModule:get_subscription(JID, Nidx, SubID) of

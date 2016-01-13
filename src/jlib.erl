@@ -5,7 +5,7 @@
 %%% Created : 23 Nov 2002 by Alexey Shchepin <alexey@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -872,16 +872,16 @@ binary_to_atom(Bin) ->
     erlang:binary_to_atom(Bin, utf8).
 
 binary_to_integer(Bin) ->
-    list_to_integer(binary_to_list(Bin)).
+    erlang:binary_to_integer(Bin).
 
 binary_to_integer(Bin, Base) ->
-    list_to_integer(binary_to_list(Bin), Base).
+    erlang:binary_to_integer(Bin, Base).
 
 integer_to_binary(I) ->
-    list_to_binary(integer_to_list(I)).
+    erlang:integer_to_binary(I).
 
 integer_to_binary(I, Base) ->
-    list_to_binary(erlang:integer_to_list(I, Base)).
+    erlang:integer_to_binary(I, Base).
 
 tuple_to_binary(T) ->
     iolist_to_binary(tuple_to_list(T)).

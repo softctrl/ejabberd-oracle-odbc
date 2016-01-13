@@ -6,7 +6,7 @@
 %%% Created :  4 Jul 2013 by Evgeniy Khramtsov <ekhramtsov@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2013-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2013-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -34,8 +34,8 @@
 -export([start/2, stop/1]).
 
 -export([user_send_packet/4, user_receive_packet/5,
-	 process_iq_v0_2/3, process_iq_v0_3/3, remove_user/2,
-	 remove_user/3, mod_opt_type/1, muc_process_iq/4,
+	 process_iq_v0_2/3, process_iq_v0_3/3, disco_sm_features/5,
+	 remove_user/2, remove_user/3, mod_opt_type/1, muc_process_iq/4,
 	 muc_filter_message/5]).
 
 -include_lib("stdlib/include/ms_transform.hrl").
@@ -88,6 +88,8 @@ start(Host, Opts) ->
 		       muc_filter_message, 50),
     ejabberd_hooks:add(muc_process_iq, Host, ?MODULE,
 		       muc_process_iq, 50),
+    ejabberd_hooks:add(disco_sm_features, Host, ?MODULE,
+		       disco_sm_features, 50),
     ejabberd_hooks:add(remove_user, Host, ?MODULE,
 		       remove_user, 50),
     ejabberd_hooks:add(anonymous_purge_hook, Host, ?MODULE,
@@ -130,6 +132,8 @@ stop(Host) ->
     gen_iq_handler:remove_iq_handler(ejabberd_sm, Host, ?NS_MAM_0),
     gen_iq_handler:remove_iq_handler(ejabberd_local, Host, ?NS_MAM_1),
     gen_iq_handler:remove_iq_handler(ejabberd_sm, Host, ?NS_MAM_1),
+    ejabberd_hooks:delete(disco_sm_features, Host, ?MODULE,
+			  disco_sm_features, 50),
     ejabberd_hooks:delete(remove_user, Host, ?MODULE,
 			  remove_user, 50),
     ejabberd_hooks:delete(anonymous_purge_hook, Host,
@@ -162,7 +166,7 @@ user_receive_packet(Pkt, C2SState, JID, Peer, To) ->
     LUser = JID#jid.luser,
     LServer = JID#jid.lserver,
     IsBareCopy = is_bare_copy(JID, To),
-    case should_archive(Pkt) of
+    case should_archive(Pkt, LServer) of
 	true when not IsBareCopy ->
 	    NewPkt = strip_my_archived_tag(Pkt, LServer),
 	    case store_msg(C2SState, NewPkt, LUser, LServer, Peer, recv) of
@@ -187,7 +191,7 @@ user_receive_packet(Pkt, C2SState, JID, Peer, To) ->
 user_send_packet(Pkt, C2SState, JID, Peer) ->
     LUser = JID#jid.luser,
     LServer = JID#jid.lserver,
-    case should_archive(Pkt) of
+    case should_archive(Pkt, LServer) of
 	true ->
 	    NewPkt = strip_my_archived_tag(Pkt, LServer),
 	    store_msg(C2SState, jlib:replace_from_to(JID, Peer, NewPkt),
@@ -200,12 +204,12 @@ user_send_packet(Pkt, C2SState, JID, Peer) ->
 muc_filter_message(Pkt, #state{config = Config} = MUCState,
 		   RoomJID, From, FromNick) ->
     if Config#config.mam ->
-	    By = jid:to_string(RoomJID),
-	    NewPkt = strip_my_archived_tag(Pkt, By),
+	    LServer = RoomJID#jid.lserver,
+	    NewPkt = strip_my_archived_tag(Pkt, LServer),
 	    case store_muc(MUCState, NewPkt, RoomJID, From, FromNick) of
 		{ok, ID} ->
 		    StanzaID = #xmlel{name = <<"stanza-id">>,
-				      attrs = [{<<"by">>, By},
+				      attrs = [{<<"by">>, LServer},
                                                {<<"xmlns">>, ?NS_SID_0},
                                                {<<"id">>, ID}]},
                     NewEls = [StanzaID|NewPkt#xmlel.children],
@@ -247,17 +251,33 @@ process_iq_v0_3(#jid{lserver = LServer} = From,
 process_iq_v0_3(From, To, IQ) ->
     process_iq(From, To, IQ).
 
-muc_process_iq(#iq{type = set,
+muc_process_iq(#iq{type = set, lang = Lang,
 		   sub_el = #xmlel{name = <<"query">>,
 				   attrs = Attrs} = SubEl} = IQ,
 	       MUCState, From, To) ->
-    case xml:get_attr_s(<<"xmlns">>, Attrs) of
-	?NS_MAM_0 ->
+    XMLNS = xml:get_attr_s(<<"xmlns">>, Attrs),
+    if XMLNS == ?NS_MAM_0; XMLNS == ?NS_MAM_1 ->
 	    LServer = MUCState#state.server_host,
 	    Role = mod_muc_room:get_role(From, MUCState),
-	    process_iq(LServer, From, To, IQ, SubEl,
-		       get_xdata_fields(SubEl), {groupchat, Role, MUCState});
-	_ ->
+	    Config = MUCState#state.config,
+	    if Config#config.members_only ->
+		    case mod_muc_room:is_occupant_or_admin(From, MUCState) of
+			true ->
+			    process_iq(LServer, From, To, IQ, SubEl,
+				       get_xdata_fields(SubEl),
+				       {groupchat, Role, MUCState});
+			false ->
+			    Text = <<"Only members are allowed to query "
+				     "archives of this room">>,
+			    Error = ?ERRT_FORBIDDEN(Lang, Text),
+			    IQ#iq{type = error, sub_el = [SubEl, Error]}
+		    end;
+	       true ->
+		    process_iq(LServer, From, To, IQ, SubEl,
+			       get_xdata_fields(SubEl),
+			       {groupchat, Role, MUCState})
+	    end;
+       true ->
 	    IQ
     end;
 muc_process_iq(IQ, _MUCState, _From, _To) ->
@@ -275,6 +295,15 @@ get_xdata_fields(SubEl) ->
 	{false, false} ->
 	    []
     end.
+
+disco_sm_features(empty, From, To, Node, Lang) ->
+    disco_sm_features({result, []}, From, To, Node, Lang);
+disco_sm_features({result, OtherFeatures},
+		  #jid{luser = U, lserver = S},
+		  #jid{luser = U, lserver = S}, <<>>, _Lang) ->
+    {result, [?NS_MAM_TMP, ?NS_MAM_0, ?NS_MAM_1 | OtherFeatures]};
+disco_sm_features(Acc, _From, _To, _Node, _Lang) ->
+    Acc.
 
 %%%===================================================================
 %%% Internal functions
@@ -356,14 +385,14 @@ process_iq(LServer, From, To, IQ, SubEl, Fs, MsgType) ->
 			    With, RSM, IQ, MsgType)
     end.
 
-should_archive(#xmlel{name = <<"message">>} = Pkt) ->
+should_archive(#xmlel{name = <<"message">>} = Pkt, LServer) ->
     case xml:get_attr_s(<<"type">>, Pkt#xmlel.attrs) of
 	<<"error">> ->
 	    false;
 	<<"groupchat">> ->
 	    false;
 	_ ->
-	    case is_resent(Pkt) of
+	    case is_resent(Pkt, LServer) of
 		true ->
 		    false;
 		false ->
@@ -383,7 +412,7 @@ should_archive(#xmlel{name = <<"message">>} = Pkt) ->
 		    end
 	    end
     end;
-should_archive(#xmlel{}) ->
+should_archive(#xmlel{}, _LServer) ->
     false.
 
 strip_my_archived_tag(Pkt, LServer) ->
@@ -463,12 +492,17 @@ has_no_store_hint(Message) ->
     xml:get_subtag_with_xmlns(Message, <<"no-permanent-storage">>, ?NS_HINTS)
       /= false.
 
-is_resent(Pkt) ->
-    case xml:get_subtag_cdata(Pkt, <<"delay">>) of
-	<<>> ->
-	    false;
-	Desc ->
-	    binary:match(Desc, <<"Resent">>) =/= nomatch
+is_resent(Pkt, LServer) ->
+    case xml:get_subtag_with_xmlns(Pkt, <<"stanza-id">>, ?NS_SID_0) of
+	#xmlel{attrs = Attrs} ->
+	    case xml:get_attr(<<"by">>, Attrs) of
+		{value, LServer} ->
+		    true;
+		_ ->
+		    false
+	    end;
+	false ->
+	    false
     end.
 
 store_msg(C2SState, Pkt, LUser, LServer, Peer, Dir) ->
@@ -722,25 +756,34 @@ select(LServer, #jid{luser = LUser} = JidRequestor,
 		   true ->
 			{Res, true}
 		end,
-	    {lists:map(
+	    {lists:flatmap(
 	       fun([TS, XML, PeerBin, Kind, Nick]) ->
-		       #xmlel{} = El = xml_stream:parse_element(XML),
-		       Now = usec_to_now(jlib:binary_to_integer(TS)),
-		       PeerJid = jid:tolower(jid:from_string(PeerBin)),
-		       T = case Kind of
-                               <<"">> -> chat;
-                               null -> chat;
-                               _ -> jlib:binary_to_atom(Kind)
-			   end,
-		       {TS, jlib:binary_to_integer(TS),
-			msg_to_el(#archive_msg{timestamp = Now,
-					       packet = El,
-					       type = T,
-					       nick = Nick,
-					       peer = PeerJid},
-				  MsgType,
-				  JidRequestor)}
-		    end, Res1), IsComplete, jlib:binary_to_integer(Count)};
+		       try
+			   #xmlel{} = El = xml_stream:parse_element(XML),
+			   Now = usec_to_now(jlib:binary_to_integer(TS)),
+			   PeerJid = jid:tolower(jid:from_string(PeerBin)),
+			   T = case Kind of
+				   <<"">> -> chat;
+				   null -> chat;
+				   _ -> jlib:binary_to_atom(Kind)
+			       end,
+			   [{TS, jlib:binary_to_integer(TS),
+			     msg_to_el(#archive_msg{timestamp = Now,
+						    packet = El,
+						    type = T,
+						    nick = Nick,
+						    peer = PeerJid},
+				       MsgType,
+				       JidRequestor)}]
+		       catch _:Err ->
+			       ?ERROR_MSG("failed to parse data from SQL: ~p. "
+					  "The data was: "
+					  "timestamp = ~s, xml = ~s, "
+					  "peer = ~s, kind = ~s, nick = ~s",
+					  [Err, TS, XML, PeerBin, Kind, Nick]),
+			       []
+		       end
+	       end, Res1), IsComplete, jlib:binary_to_integer(Count)};
 	_ ->
 	    {[], false, 0}
     end.

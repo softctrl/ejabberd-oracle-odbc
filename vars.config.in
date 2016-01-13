@@ -1,6 +1,6 @@
 %%%-------------------------------------------------------------------
 %%% @author Evgeniy Khramtsov <ekhramtsov@process-one.net>
-%%% @copyright (C) 2013, Evgeniy Khramtsov
+%%% @copyright (C) 2013-2016, Evgeniy Khramtsov
 %%% @doc
 %%%
 %%% @end
@@ -9,7 +9,6 @@
 %% Macros
 {roster_gateway_workaround, @roster_gateway_workaround@}.
 {full_xml, @full_xml@}.
-{nif, @nif@}.
 {db_type, @db_type@}.
 {debug, @debug@}.
 {hipe, @hipe@}.
@@ -45,6 +44,8 @@
 {localstatedir, "{{release_dir}}/var"}.
 {libdir, "{{release_dir}}/lib"}.
 {docdir, "{{release_dir}}/doc"}.
+
+{latest_deps, @latest_deps@}.
 
 {ldflags, "@LDFLAGS@"}.
 {cflags, "@CFLAGS@"}.
