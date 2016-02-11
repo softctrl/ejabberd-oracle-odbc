@@ -461,11 +461,13 @@ process_iq(#jid{luser = LUser, lserver = LServer},
 		    (_, {A, N}) ->
 			{A, N}
 		end, {[], []}, SubEl#xmlel.children)} of
-	{Default, {Always, Never}} ->
-	    case write_prefs(LUser, LServer, LServer, Default,
-		    lists:usort(Always), lists:usort(Never)) of
+	{Default, {Always0, Never0}} ->
+	    Always = lists:usort(Always0),
+	    Never = lists:usort(Never0),
+	    case write_prefs(LUser, LServer, LServer, Default, Always, Never) of
 		ok ->
-		    IQ#iq{type = result, sub_el = []};
+		    NewPrefs = prefs_el(Default, Always, Never, IQ#iq.xmlns),
+		    IQ#iq{type = result, sub_el = [NewPrefs]};
 		_Err ->
 		    IQ#iq{type = error,
 			sub_el = [SubEl, ?ERR_INTERNAL_SERVER_ERROR]}
@@ -477,21 +479,11 @@ process_iq(#jid{luser = LUser, lserver = LServer},
 	   #jid{lserver = LServer},
 	   #iq{type = get, sub_el = #xmlel{name = <<"prefs">>}} = IQ) ->
     Prefs = get_prefs(LUser, LServer),
-    Default = jlib:atom_to_binary(Prefs#archive_prefs.default),
-    JFun = fun(L) ->
-		   [#xmlel{name = <<"jid">>,
-			   children = [{xmlcdata, jid:to_string(J)}]}
-		    || J <- L]
-	   end,
-    Always = #xmlel{name = <<"always">>,
-		    children = JFun(Prefs#archive_prefs.always)},
-    Never = #xmlel{name = <<"never">>,
-		   children = JFun(Prefs#archive_prefs.never)},
-    IQ#iq{type = result,
-	  sub_el = [#xmlel{name = <<"prefs">>,
-			   attrs = [{<<"xmlns">>, IQ#iq.xmlns},
-				    {<<"default">>, Default}],
-			   children = [Always, Never]}]};
+    PrefsEl = prefs_el(Prefs#archive_prefs.default,
+		       Prefs#archive_prefs.always,
+		       Prefs#archive_prefs.never,
+		       IQ#iq.xmlns),
+    IQ#iq{type = result, sub_el = [PrefsEl]};
 process_iq(_, _, #iq{sub_el = SubEl} = IQ) ->
     IQ#iq{type = error, sub_el = [SubEl, ?ERR_NOT_ALLOWED]}.
 
@@ -529,11 +521,8 @@ process_iq(LServer, #jid{luser = LUser} = From, To, IQ, SubEl, Fs, MsgType) ->
 			    With, limit_max(RSM, NS), IQ, MsgType)
     end.
 
-muc_process_iq(#iq{lang = Lang, sub_el = SubEl} = IQ,
-	       #state{config = #config{members_only = MembersOnly}} = MUCState,
-	       From, To, Fs) ->
-    case not MembersOnly orelse
-	mod_muc_room:is_occupant_or_admin(From, MUCState) of
+muc_process_iq(#iq{lang = Lang, sub_el = SubEl} = IQ, MUCState, From, To, Fs) ->
+    case may_enter_room(From, MUCState) of
 	true ->
 	    LServer = MUCState#state.server_host,
 	    Role = mod_muc_room:get_role(From, MUCState),
@@ -714,6 +703,12 @@ is_resent(Pkt, LServer) ->
 	    false
     end.
 
+may_enter_room(From,
+	       #state{config = #config{members_only = false}} = MUCState) ->
+    mod_muc_room:get_affiliation(From, MUCState) /= outcast;
+may_enter_room(From, MUCState) ->
+    mod_muc_room:is_occupant_or_admin(From, MUCState).
+
 store_msg(C2SState, Pkt, LUser, LServer, Peer, Dir) ->
     Prefs = get_prefs(LUser, LServer),
     case should_archive_peer(C2SState, Prefs, Peer) of
@@ -871,6 +866,22 @@ get_prefs(LUser, LServer, odbc) ->
 	    error
     end.
 
+prefs_el(Default, Always, Never, NS) ->
+    Default1 = jlib:atom_to_binary(Default),
+    JFun = fun(L) ->
+		   [#xmlel{name = <<"jid">>,
+			   children = [{xmlcdata, jid:to_string(J)}]}
+		    || J <- L]
+	   end,
+    Always1 = #xmlel{name = <<"always">>,
+		     children = JFun(Always)},
+    Never1 = #xmlel{name = <<"never">>,
+		    children = JFun(Never)},
+    #xmlel{name = <<"prefs">>,
+	   attrs = [{<<"xmlns">>, NS},
+		    {<<"default">>, Default1}],
+	   children = [Always1, Never1]}.
+
 maybe_activate_mam(LUser, LServer) ->
     ActivateOpt = gen_mod:get_module_opt(LServer, ?MODULE,
 					 request_activates_archiving,
@@ -916,12 +927,12 @@ select_and_send(LServer, From, To, Start, End, With, RSM, IQ, MsgType, DBType) -
 select_and_start(LServer, From, To, Start, End, With, RSM, MsgType, DBType) ->
     case MsgType of
 	chat ->
-	    select(LServer, From, Start, End, With, RSM, MsgType, DBType);
+	    select(LServer, From, From, Start, End, With, RSM, MsgType, DBType);
 	{groupchat, _Role, _MUCState} ->
-	    select(LServer, To, Start, End, With, RSM, MsgType, DBType)
+	    select(LServer, From, To, Start, End, With, RSM, MsgType, DBType)
     end.
 
-select(_LServer, JidRequestor, Start, End, _With, RSM,
+select(_LServer, JidRequestor, JidArchive, Start, End, _With, RSM,
        {groupchat, _Role, #state{config = #config{mam = false},
 				 history = History}} = MsgType,
        _DBType) ->
@@ -941,8 +952,8 @@ select(_LServer, JidRequestor, Start, End, _With, RSM,
 					  peer = undefined,
 					  nick = Nick,
 					  packet = Pkt},
-				       MsgType,
-				       JidRequestor)}], I+1};
+				       MsgType, JidRequestor, JidArchive)}],
+			   I+1};
 		      false ->
 			  {[], I+1}
 		  end
@@ -958,7 +969,8 @@ select(_LServer, JidRequestor, Start, End, _With, RSM,
 	_ ->
 	    {Msgs, true, L}
     end;
-select(_LServer, #jid{luser = LUser, lserver = LServer} = JidRequestor,
+select(_LServer, JidRequestor,
+       #jid{luser = LUser, lserver = LServer} = JidArchive,
        Start, End, With, RSM, MsgType, mnesia) ->
     MS = make_matchspec(LUser, LServer, Start, End, With),
     Msgs = mnesia:dirty_select(archive_msg, MS),
@@ -969,13 +981,13 @@ select(_LServer, #jid{luser = LUser, lserver = LServer} = JidRequestor,
        fun(Msg) ->
 	       {Msg#archive_msg.id,
 		jlib:binary_to_integer(Msg#archive_msg.id),
-		msg_to_el(Msg, MsgType, JidRequestor)}
+		msg_to_el(Msg, MsgType, JidRequestor, JidArchive)}
        end, FilteredMsgs), IsComplete, Count};
-select(LServer, #jid{luser = LUser} = JidRequestor,
+select(LServer, JidRequestor, #jid{luser = LUser} = JidArchive,
        Start, End, With, RSM, MsgType, {odbc, Host}) ->
     User = case MsgType of
 	       chat -> LUser;
-	       {groupchat, _Role, _MUCState} -> jid:to_string(JidRequestor)
+	       {groupchat, _Role, _MUCState} -> jid:to_string(JidArchive)
 	   end,
     {Query, CountQuery} = make_sql_query(User, LServer,
 					 Start, End, With, RSM),
@@ -1019,8 +1031,7 @@ select(LServer, #jid{luser = LUser} = JidRequestor,
 						    type = T,
 						    nick = Nick,
 						    peer = PeerJid},
-				       MsgType,
-				       JidRequestor)}]
+				       MsgType, JidRequestor, JidArchive)}]
 		       catch _:Err ->
 			       ?ERROR_MSG("failed to parse data from SQL: ~p. "
 					  "The data was: "
@@ -1035,31 +1046,44 @@ select(LServer, #jid{luser = LUser} = JidRequestor,
     end.
 
 msg_to_el(#archive_msg{timestamp = TS, packet = Pkt1, nick = Nick, peer = Peer},
-	  MsgType, #jid{lserver = LServer} = JidRequestor) ->
-    Pkt2 = maybe_update_from_to(Pkt1, JidRequestor, Peer, MsgType, Nick),
+	  MsgType, JidRequestor, #jid{lserver = LServer} = JidArchive) ->
+    Pkt2 = maybe_update_from_to(Pkt1, JidRequestor, JidArchive, Peer, MsgType,
+				Nick),
     Pkt3 = #xmlel{name = <<"forwarded">>,
 		  attrs = [{<<"xmlns">>, ?NS_FORWARD}],
 		  children = [fxml:replace_tag_attr(
 				<<"xmlns">>, <<"jabber:client">>, Pkt2)]},
     jlib:add_delay_info(Pkt3, LServer, TS).
 
-maybe_update_from_to(#xmlel{children = Els} = Pkt, JidRequestor,
-		     Peer, {groupchat, Role, _MUCState}, Nick) ->
-    Items = case Role of
-		moderator when Peer /= undefined ->
+maybe_update_from_to(#xmlel{children = Els} = Pkt, JidRequestor, JidArchive,
+		     Peer, {groupchat, Role,
+			    #state{config = #config{anonymous = Anon}}},
+		     Nick) ->
+    ExposeJID = case {Peer, JidRequestor} of
+		    {undefined, _JidRequestor} ->
+			false;
+		    {{U, S, _R}, #jid{luser = U, lserver = S}} ->
+			true;
+		    {_Peer, _JidRequestor} when not Anon; Role == moderator ->
+			true;
+		    {_Peer, _JidRequestor} ->
+			false
+		end,
+    Items = case ExposeJID of
+		true ->
 		    [#xmlel{name = <<"x">>,
 			    attrs = [{<<"xmlns">>, ?NS_MUC_USER}],
 			    children =
 				[#xmlel{name = <<"item">>,
 					attrs = [{<<"jid">>,
 						  jid:to_string(Peer)}]}]}];
-		_ ->
+		false ->
 		    []
 	    end,
     Pkt1 = Pkt#xmlel{children = Items ++ Els},
-    Pkt2 = jlib:replace_from(jid:replace_resource(JidRequestor, Nick), Pkt1),
+    Pkt2 = jlib:replace_from(jid:replace_resource(JidArchive, Nick), Pkt1),
     jlib:remove_attr(<<"to">>, Pkt2);
-maybe_update_from_to(Pkt, _JidRequestor, _Peer, chat, _Nick) ->
+maybe_update_from_to(Pkt, _JidRequestor, _JidArchive, _Peer, chat, _Nick) ->
     Pkt.
 
 is_bare_copy(#jid{luser = U, lserver = S, lresource = R}, To) ->

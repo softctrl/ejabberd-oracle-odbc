@@ -1,5 +1,7 @@
-ejabberd Community Edition for Oracle ODBC
-=========================================
+ejabberd Community Edition 
+==========================
+
+[![Build Status](https://travis-ci.org/processone/ejabberd.svg?branch=master)](https://travis-ci.org/processone/ejabberd) [![Hex version](https://img.shields.io/hexpm/v/ejabberd.svg "Hex version")](https://hex.pm/packages/ejabberd)
 
 ejabberd is a distributed, fault-tolerant technology that allows the creation
 of large-scale instant messaging applications. The server can reliably support
@@ -170,5 +172,3 @@ Links
 - Documentation: http://docs.ejabberd.im
 - Community site: https://www.ejabberd.im
 - ejabberd commercial offering and support: https://www.process-one.net/en/ejabberd
-- commercial support for Oracle ODBC connection: http://www.0x09.com.br
-
